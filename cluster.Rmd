@@ -1,0 +1,2865 @@
+---
+title: "Clustering Huntington and Controls"
+author: "Izar de Villasante, Brainvitge"
+date: '`r format(Sys.Date(),"%e de %B, %Y")`'
+#runtime: shiny
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
+  pdf_document:
+    keep_tex: yes
+    toc: yes
+    toc_depth: 3
+params:
+  
+  
+  
+  
+  
+  
+  main_folder: /home/izar/notebooks/Huntington #/home/estela/Desktop/Izar/Huntington
+  controls: ./Controls
+  controls_pattern: "C[0-9][0-9]_1"
+  control_color: "aquamarine"  #hcl(h=60,c=100,l=65) 
+  subjects: ./Subjects
+  subjects_pattern: "H[0-9][0-9]_1"
+  HD_color: "indianred1"      #hcl(h=15,c=100,l=65) #"#ED813E" # 
+  results: ./Results
+  excel_global: "Global_Measures.xlsx" 
+  excel_local: "Local_Measures.xlsx"
+  variables: [vol]
+    
+header-includes: 
+  - \usepackage{bbm}
+  - \usepackage[spanish]{babel}
+---
+\newline
+\newline
+
+
+
+```{r setup, include=FALSE, cache=FALSE}
+
+knitr::opts_knit$set(root.dir = normalizePath(params$main_folder)) # root directory when evaluating code chunks
+knitr::opts_chunk$set(
+  
+  dev = "svglite",
+  fig.ext = ".svg",
+  echo = TRUE, # include R source code in the output file
+  comment = NULL, # prefix for comments in output NULL = no comments in output
+  message = FALSE, # Don't show message() looks more tidy
+	warning = FALSE, # Same with warnings
+  cache = FALSE)  # Saves output of chunks for lazy loading, useful when repeating high-computational chunks.
+
+options(width=90)
+
+```
+
+```{r}
+getwd()
+```
+
+```{r packages, message=FALSE, echo=FALSE, warning=FALSE}
+#libraries <- c("prettyR","knitr","neuralnet", "NeuralNetTools", "class", "caret", "kernlab", "e1071", "C50", "randomForest")
+
+libraries <- c("knitr", "readxl","yaml","ggplot2","reshape","hues","svglite","corrplot","FactoMineR",	"factoextra", "psych","GPArotation")
+check.libraries <- is.element(libraries, installed.packages()[, 1])==FALSE
+libraries.to.install <- libraries[check.libraries]
+if (length(libraries.to.install!=0)) {
+  install.packages(libraries.to.install, repos = "http://cran.us.r-project.org")
+}
+
+success <- sapply(libraries,require, quietly = FALSE,  character.only = TRUE)
+if(length(success) != length(libraries)) {stop("A package failed to return a success in require() function.")}
+```
+\newpage
+\newpage
+
+# Introduction
+This document analyses and explains how to divide several Huntington disease patients into groups, depending on the volumes of different regions of the brain.
+
+There is a theoretical background suggesting subcategories of the disease, based in functional evidence of the sympthoms. Further research has been conducted suggesting 2 categories. (Physical sympthoms, mood disorders + physical sympthoms ) \newline
+The main objective of this analysis is to provide a method to detect the disease in its earlier stages, when there is no clinical information or the symphtoms are not yet visible. This information may help to design a better treatment and it may unveil novel markers allowing profesionals to anticipate to the disease progression. 
+This is an unsupervised machine learning approach, since we don't know, a priori how many groups there are or which patients belong to each of the groups.  
+
+# Loading data 
+## Neuroimage Data (MRI whole region)
+
+Neuroimage data can be segmented in different ways with different tools. In our case we use Freesurfer. Freesurfer parcellates the brain  assigning a neuroanatomical label to each location on a surface model based on probabilistic information estimated from a manually labeled training set.
+
+Freesurfer works with neuroimage RMI raw screening data, providing quantitative information for each region of the parcellation.
+This parcellation results will be our starting point.
+```{r assign, echo=FALSE, eval=TRUE}
+# Carpeta y fichero con los datos
+controls <- normalizePath(params$controls)
+subjects <- normalizePath(params$subjects)
+results <- normalizePath(params$results)
+
+controls_list <- list.files(controls,
+                       pattern = params$controls_pattern,
+                       recursive = FALSE,
+                       include.dirs = TRUE)
+
+HD_list <- list.files(subjects,
+                       pattern = params$subjects_pattern,
+                       recursive = FALSE,
+                       include.dirs = TRUE)
+results_list <- list.files(results,
+                           pattern = params$controls_pattern,
+                           full.names = TRUE, 
+                           recursive = FALSE,
+                           include.dirs = TRUE)
+results_list <-  c(results_list,list.files(results,
+                           pattern = params$subjects_pattern,
+                           full.names = TRUE, 
+                           recursive = FALSE,
+                           include.dirs = TRUE))
+results_list <- results_list[file.info(results_list)$isdir] # Check only takes folders
+
+```
+In this study we have 2 main groups: controls & Huntington diseased.
+
+   
+* **Controls (C)**: There are `r length(controls_list)` healthy participants in the control group. The path to controls subfolder is: 
+*<br /><br />`r controls`<br /><br />*
+This subfolder contains one folder for each participant in the control group. Each of the folders are named after the patient ID and contain the following info:
+
+
+    + 'Age.txt' & 'Sex.txt' containing the age and sex of the patient respectively. 
+
+    + RMN raw data as niftii files '.IMA' 
+
+    
+* **Huntingon diseased (HD)**: This group is formed by `r length(HD_list)` participants in different stages of the disease. The path to HD subfolder is:
+ *<br /><br />`r subjects` <br /><br />*
+ The following information is provided for each HD participant:
+
+
+    + 'Age.txt' & 'Sex.txt' containing the age and sex of the patient respectively.
+    
+    + RMN raw data as niftii files '.IMA' 
+    
+\newline
+\newline
+
+
+<!-- ## Neuroimage data (voxel Base) -->
+
+<!-- ```{r} -->
+
+<!-- VBM <- read.csv("~/VBM_Tables/Left_Thalamus_Proper_table.txt", row.names=1) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/CSF_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/fourth_Ventricle_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Left_Accumbens_area_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Left_Amygdala_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Left_Caudate_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Left_Hippocampus_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Left_Pallidum_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Left_Putamen_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Right_Accumbens_area_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Right_Amygdala_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Right_Caudate_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Right_Hippocampus_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Right_Pallidum_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Right_Putamen_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/Right_Thalamus_Proper_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/third_Ventricle_table.txt", row.names=1)) -->
+<!-- VBM <- rbind(VBM, read.csv("~/VBM_Tables/WM_hypointensities_table.txt", row.names=1)) -->
+
+<!-- VBM <- t(VBM) -->
+<!-- ``` -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Clinical Data
+A series of clinical data was collected from the patients. This data can be organized in two categories.
+* Descriptive variables: which includes all the information related to the clinicla follow-up, such as age, gender or disease progression.
+*Sympthomatic variables: This variables rely on a series of test to asses performance of the participants in motor, psicological or cognitive tasks. The results of this test allows us to measure the disease progression in a specific area and detect disease sympthoms.
+
+### Descriptive variables
+
+We have descriptive data related to age, sex and disease progression for the HD (Huntington diseased) group stored in a single excel called "descriptivos.xls".
+```{r}
+library(readxl)
+desc <- read_excel("/home/izar/notebooks/Huntington/excelfiles/descriptivos.xlsx")
+desc$Código<-NULL
+#View(descriptivos)
+head(desc)
+str(desc)
+```
+* The variable `$group` from this table, allows us to segment the HD patients into:
+
+ + symptomatic (desc$group == 1), patients where psychological/physical synthomps are present
+ + Pre-symptomatic (desc$group == 2), patients where no sympthoms are yet observable.
+
+* `$Dis.Burden`&`$CAP`are indicators of disease progression. We will use CAP, since it is more precise.
+
+* `$Code`&`$Código` are identical and contain the subject_id in order to identify each subject.
+In this case we must delete patient "H43_1", which didn't conclude the study.
+```{r}
+
+desc <- desc[!desc$Code=="H43_1",]
+#all.equal(desc$Code,HD_subj_id)
+
+```
+
+
+* `$gender` contains "M" for male and "F" for female.
+
+* `$age` contains the age in years of the patient. Age has an influence in the brains' health and is taken into account for the CAP score.
+
+### Symptomatic data
+
+As previously introduced, patients undergo a series of behavioural tests in order to detect sympthoms of disease progression in different categories.
+The following excel contains this data:
+
+```{r load sympthoms}
+behave <- read_excel("/home/izar/notebooks/Huntington/excelfiles/Matrix_behav_Controls_Patients_flica.xlsx")
+str(behave)
+```
+The variable `$Code` contains the patient identifier, which is needed to associate the values contained in each variable to the corresponding patient.
+Lets see which patients provide sympthomatic data:
+`r behave$Code`
+\newline\newline
+```{r}
+last_control = which(behave$Code == "C35_1") #which(behave$Code == "H01_1")-1
+length(behave$Code[seq_len(last_control)])# number of controls
+behave$Code[seq_len(last_control)]
+length(behave$Code[-seq_len(last_control)])# number of HD
+behave$Code[-seq_len(last_control)]
+```
+
+Since we are going to evaluate only diseased patients we subset behave data frame into behave_HD, containing only HD patients.
+```{r}
+behave_HD <- as.data.frame(behave[-seq_len(last_control),])
+
+```
+
+
+
+There are 3 main categories:
+1. Motor sympthoms:
+There is only data for HD group in this category. We will resume this category into the following variables (7):
+··* $UHDRS_motor
+
+··* $UHDRS_motor_chorea
+
+··* $UHDRS_motor_parkinsonism
+
+··* $nine_hole_peg_mean_domin
+
+··* $nine_hole_peg_mean_non_dom
+
+··* $nine_hole_peg_mean_all
+
+··* $nine_hole_peg_mean_dif_nd_d
+
+```{r}
+motor.vars <- c("Code",
+                "UHDRS_motor",
+                "UHDRS_motor_chorea",
+                "UHDRS_motor_parkinsonism",
+                "nine_hole_peg_mean_domin",
+                "nine_hole_peg_mean_non_dom",
+                "nine_hole_peg_mean_all",
+                "nine_hole_peg_mean_dif_nd_d")
+motor <- behave_HD[motor.vars] #Subset containing motor sympthoms
+
+#The following would remove all patients with empty cells "NA"
+motor <- motor[complete.cases(motor),] #--> removes rows with empty (NA)
+str(motor)
+#Or we could remove just the patients to obtain all the HD group
+#last_control = which(behave$Code == "C35_1") #which(behave$Code == "H01_1")-1
+#m2 <- motor[-seq_len(last_control),]
+```
+
+
+
+
+2. Psychiatric sympthoms:
+
+```{r}
+psycho.vars <- c("Code",
+                "Sen_Punish",
+                "Sen_Reward",
+                "Lille_Apathy",
+                "PBA_depression_score",
+                "PBA_anxiety_score",
+                "PBA_apathy_score",
+                "PBA_perseveration_score")
+psycho <- behave_HD[psycho.vars] #Subset containing motor sympthoms
+
+#The following would remove all patients with empty cells "NA"
+psycho <- psycho[complete.cases(psycho),] #--> removes rows with empty (NA)
+str(psycho)
+
+```
+
+3. Cognitive sympthoms:
+
+```{r Cognitive}
+cognitive.vars <- c("Code",
+                "TMT_B_A",
+                "Digit_backwards",
+                "Verbal_fluency_total_FAS",
+                "Symbol_digit",
+                "Stroop_interf")
+cognitive <- behave_HD[cognitive.vars] #Subset containing motor sympthoms
+
+#The following would remove all patients with empty cells "NA"
+cognitive <- cognitive[complete.cases(cognitive),] #--> removes rows with empty (NA)
+str(cognitive)
+
+```
+More information about each test can be found in the annex.
+
+## Clinical data.
+As we mentioned before, the different tests to evaluate sympthomatic data are driven by different hospitals. Add to it, that some participants quited the experiment. For this reason, we must update our dataset by removing patients with incomplete data. 
+We will start by checking which clinical data do we have available.  
+
+First lets see how many tests are we missing:
+```{r}
+behave_HD_tests<-behave_HD[,unique(c(motor.vars,cognitive.vars,psycho.vars))] #Creates df with all patients and results of all tests (including empty)
+rownames(behave_HD_tests)<-behave_HD_tests$Code
+behave_HD_tests<-behave_HD_tests[ , -which(names(behave_HD_tests) %in% "Code")]
+behave_HD_alltests<- behave_HD_tests
+complete_tests<-table(is.na(behave_HD_tests))
+complete_tests
+
+```
+
+
+We can show in a pie chart to get a visual idea.
+
+```{r}
+
+lbls <- c("completed","missing")
+pct <- round(complete_tests/sum(complete_tests)*100)
+lbls <- paste(lbls, pct) # add percents to labels 
+lbls <- paste(lbls,"%",sep="") # ad % to labels 
+
+pie(complete_tests, labels = lbls, main="Pie Chart of completed tests",col=rainbow(2))
+
+```
+
+
+To check which patient contain full sympthomatic data:
+```{r}
+common <- intersect(intersect(motor$Code,psycho$Code),cognitive$Code)
+length(common)
+common
+#or we can count complete cases in behave_HD_tests:
+table(complete.cases(behave_HD_tests))
+```
+The main challenge is we only have values for patients, so it is difficult to set the "healthy" values. Further away from not having control data on sympthomatic variables, some test results are wrong or incomplete, reducing the number of participants with sympthomatic data to `r length(common)`. 
+
+Since we are excluding too many participants we must adapt and discard those variables which are unimportant or incomplete:
+
+We could increase the number of participants by excluding those variables with missing data.
+Most of these tests are only undergone by HD patients, therefore we will exclude the control group from our data set. 
+The new dataset `HD_behave` will contain only HD patients.
+
+
+We have sympthomatic data for `r length(behave_HD)` participants. 
+Now we will see which variables contain more data and which of them are incomplete:
+```{r}
+miss <- sort(colSums(is.na(behave_HD_tests)))
+miss
+write.table(miss, "~/missing.txt", sep="\t")
+```
+
+
+
+
+Now let's check for each group:
+
+#### Motor:
+
+```{r}
+behave_HD_motor <- as.data.frame(behave_HD_tests[motor.vars[motor.vars != "Code"]] )#All patients for motor
+
+complete_HD_motor <- as.data.frame(is.na(behave_HD_motor))
+complete_HD_motor.df <- melt(complete_HD_motor )
+complete_HD_motor.df$value <- as.numeric(complete_HD_motor.df$value)
+names(complete_HD_motor.df)<- c("test","missing")
+ggplot(data=complete_HD_motor.df, aes(x=test, y=missing)) + geom_bar(stat = "identity",fill="steelblue") + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+```{r}
+motor_missing <- behave_HD_motor[!complete.cases(behave_HD_motor),]
+write.table(motor_missing, "~/motor_missing.txt", sep="\t")
+motor_missing
+```
+
+Let's check patient H42_1 data:
+
+```{r}
+behave_HD[behave_HD$Code == "H42_1",]
+write.table(t(behave_HD[behave_HD$Code == "H42_1",]), "~/patient42.txt", sep="\t")
+```
+
+patient H42_1 has no data for UHDRS tests so it will be removed. Also nine_hole_peg tests
+
+```{r}
+behave_HD_tests <- behave_HD_tests[!rownames(behave_HD_tests) %in% "H42_1", ]
+behave_HD_tests <- behave_HD_tests[,!names(behave_HD_tests) %in% c("nine_hole_peg_mean_domin",
+                                                "nine_hole_peg_mean_non_dom", 
+                                                "nine_hole_peg_mean_all",
+                                                "nine_hole_peg_mean_dif_nd_d") ]
+
+motor.vars2 <- colnames(behave_HD_motor)[!names(behave_HD_motor) %in% c("nine_hole_peg_mean_domin",
+                                                "nine_hole_peg_mean_non_dom", 
+                                                "nine_hole_peg_mean_all",
+                                                "nine_hole_peg_mean_dif_nd_d")]
+motor.vars2
+```
+
+#### Psychiatric
+
+```{r}
+behave_HD_psycho <- as.data.frame(behave_HD_tests[psycho.vars[psycho.vars != "Code"]] )#All patients for psycho
+
+complete_HD_psycho <- as.data.frame(is.na(behave_HD_psycho))
+complete_HD_psycho.df <- melt(complete_HD_psycho )
+complete_HD_psycho.df$value <- as.numeric(complete_HD_psycho.df$value)
+names(complete_HD_psycho.df)<- c("test","missing")
+ggplot(data=complete_HD_psycho.df, aes(x=test, y=missing)) + geom_bar(stat = "identity",fill="steelblue") + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+```{r}
+psycho_missing <- behave_HD_psycho[!complete.cases(behave_HD_psycho),]
+write.table(psycho_missing, "~/psycho_missing.txt", sep="\t")
+psycho_missing
+```
+
+
+patient H14_1 has no data for Sen_punish & Sen_Reward, therefore it will be discarded. Lille_Apathy is also missing for 6 more patients so it will also be removed
+
+```{r}
+behave_HD_tests <- behave_HD_tests[!rownames(behave_HD_tests) %in% "H14_1", ]
+behave_HD_tests <- behave_HD_tests[,!names(behave_HD_tests) %in% "Lille_Apathy" ]
+dim(behave_HD_tests)
+
+psycho.vars2 <- colnames(behave_HD_psycho)[!names(behave_HD_psycho) %in% c("Lille_Apathy")]
+psycho.vars2
+```
+We still have 41 patients and 14 different tests.
+
+
+#### Cognitive
+
+
+```{r}
+behave_HD_cognitive <- as.data.frame(behave_HD_tests[cognitive.vars[cognitive.vars != "Code"]] )#All patients for cognitive
+
+complete_HD_cognitive <- as.data.frame(is.na(behave_HD_cognitive))
+complete_HD_cognitive.df <- melt(complete_HD_cognitive )
+complete_HD_cognitive.df$value <- as.numeric(complete_HD_cognitive.df$value)
+names(complete_HD_cognitive.df)<- c("test","missing")
+ggplot(data=complete_HD_cognitive.df, aes(x=test, y=missing)) + geom_bar(stat = "identity",fill="steelblue") + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+```{r}
+cognitive_missing <- behave_HD_cognitive[!complete.cases(behave_HD_cognitive),]
+write.table(cognitive_missing, "~/cognitive_missing.txt", sep="\t")
+cognitive_missing
+```
+
+
+patients H06_1 and H29_1 have no data for Stroop_interf, therefore they will be discarded. TMT_B_A and Digit_backwards will also be removed.
+
+```{r}
+behave_HD_tests <- behave_HD_tests[!rownames(behave_HD_tests) %in% c("H06_1","H29_1"), ]
+behave_HD_tests <- behave_HD_tests[,!names(behave_HD_tests) %in% c("TMT_B_A","Digit_backwards") ]
+
+cognitive.vars2 <- colnames(behave_HD_cognitive)[!names(behave_HD_cognitive) %in% c("TMT_B_A","Digit_backwards")]
+cognitive.vars2
+
+dim(behave_HD_tests)
+
+```
+
+
+With this information we can select a different set of variables for our PCA. 
+```{r}
+vars2<-c(motor.vars2, cognitive.vars2 , psycho.vars2)
+```
+
+Since every test has it's own score system we must scale the variables as explained before:
+
+
+```{r}
+behave_HD_tests_s<-as.data.frame(scale(behave_HD_tests))      #Scale or Standarize z score
+
+```
+
+
+```{r}
+names(behave_HD_tests_s)
+dim(behave_HD_tests_s)
+```
+
+Now we have observations of the `r dim(behave_HD_tests_s)[2]` most relevant variables for `r dim(behave_HD_tests_s)[1]` patients.
+
+###Remove variability
+We will proceed to remove variability provided by nuisance variables, such as Age, CAG repeats in HD gene, education, etc.
+There are two variables related to external factors that may influence our data. 
+
+-Disease Burden = age x (CAG -35.5) (Penney et al., 1997).
+
+CAG is the number of times CAG codon is repeated in Huntingtonin gene and age stands for the age of the patients. 
+
+-Cognitive Reserve Questionnaire (CRQ) (Rami et al., 2011). 
+The CRQ includes eight items and provides information regarding years of education, years of parent’s education, type of occupation, number of training courses completed, musical training, number of spoken languages, reading activity and frequency of involvement in intellectual games. The questionnaire has a maximum score of 20, with 20 representing the highest CR score.
+
+
+There is data missing for Cognitive reserve
+```{r}
+cr<-behave[behave$Code %in% rownames(behave_HD_tests_s),"Cognitive_reserve"]
+rownames(cr)<-rownames(behave_HD_tests_s)
+write.table(cr, "~/cognitive_reserve.txt", sep="\t")
+
+
+```
+Therefore this patients will only be adjusted for Disease Burden, in case it is required.
+
+We could expect a high score in cognitive reserve to be translated into low levels of impairment, a negative correlation. While the opposite should happen with disease burden. A high disease burden score should have a negative impact on the disease. Since high tests scores usually mean a higher degree of damage, disease Burden should have a positive correlation while cognitive reserve has a positive impact. High level of cognitive reserve means there are more neural cells diminishing damage impact on the brain. So CRQ should be inversely correlated. As higher CRQ less score in the tests.
+
+**Check the normality assumption.**
+```{r}
+jpeg("/home/izar/qq_all.jpg")
+par(mfrow=c(4,3))
+
+for (test in names(behave_HD_tests))
+{
+  
+  qqnorm(behave_HD_tests_s[,test],ylab=test)
+  qqline(behave_HD_tests_s[,test]) 
+  
+ 
+}
+dev.off()
+
+```
+
+
+```{r}
+for (test in names(behave_HD_tests))
+{
+  print(test)
+ print(shapiro.test(behave_HD_tests_s[,test]))  
+  
+  }
+```
+
+From the graphs and Shapiro-Wilkinson test we can refuse to say "PBA_depression_score", "PBA_anxiety_score", "PBA_apathy_score", "PBA_perseveration_score" and "UHDRS_motor_chorea" are normally distributed.
+
+Now we will check for how disease burden and cognitive reserve are related with the patients performance in each of the tests:
+
+```{r}
+symp       <- as.data.frame(behave_HD_tests_s)
+symp_mod   <- NULL
+symp$Code  <- row.names(symp)                       #Add variable Code with ID
+rownames(symp)<-row.names(behave_HD_tests)
+symp       <- merge(symp,behave[,c("Disease_burden","Cognitive_reserve","Group","Code","Age","Gender")])              #Merge with descriptive vars
+rownames(symp)<-row.names(behave_HD_tests)
+symp$Gender<- factor(symp$Gender,labels=c("M","F")) #Add Gender
+symp$Group <- factor(symp$Group,levels=c(1,2),labels=c("Control","HD"))
+
+symp_N<-symp #New data frame for corrected values
+```
+
+
+
+
+#### 1.PBA_depression_score
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$PBA_depression_score)
+```
+Since it is not normally distributed we can use Spearman-rank correlation score or .
+
+```{r}
+cor.test(symp$PBA_depression_score, symp$Cognitive_reserve,method="kendall")
+```
+
+**Disease Burden**
+
+```{r}
+plot( symp$Disease_burden, symp$PBA_depression_score)
+```
+
+
+```{r}
+cor.test(symp$PBA_depression_score, symp$Disease_burden,method="kendall",exat = FALSE)
+```
+This variable is not affected either by CR or DB scores.
+
+
+
+####2. "PBA_anxiety_score"
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$PBA_anxiety_score )
+```
+Since it is not normally distributed we can use Spearman-rank correlation score or Kendall.
+
+```{r}
+cor.test(symp$PBA_anxiety_score, symp$Cognitive_reserve,method="kendall")
+```
+
+**Disease Burden**
+
+```{r}
+plot(symp$Disease_burden, symp$PBA_anxiety_score)
+```
+
+
+```{r}
+cor.test(symp$PBA_anxiety_score, symp$Disease_burden,method="kendall",exat = FALSE)
+```
+This variable is not affected either by CR or DB scores.
+
+
+
+
+
+####3."PBA_apathy_score"
+
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$PBA_apathy_score)
+```
+Since it is not normally distributed we can use Spearman-rank correlation score or Kendall.
+
+```{r}
+cor.test(symp$PBA_apathy_score, symp$Cognitive_reserve,method="kendall")
+```
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_apathy_CRQ<-lm(symp$PBA_apathy_score  ~ symp$Cognitive_reserve + symp$Disease_burden)
+summary(model_apathy_CRQ)
+```
+```{r}
+#jpeg("/home/izar/apathyab.jpg")
+plot(symp$Cognitive_reserve, symp$PBA_apathy_score)
+abline(model_apathy_CRQ)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_apathy_CRQ)
+```
+
+There seem to be 2 influential points which are those two patients with the highest apathy value.
+
+**Disease Burden**
+
+```{r}
+plot(symp$Disease_burden, symp$PBA_apathy_score )
+```
+
+
+```{r}
+cor.test(symp$PBA_apathy_score, symp$Disease_burden,method="kendall",exat = FALSE)
+```
+p-value is slightly lower than 0.05, so we accept the correlation is not 0.
+
+```{r}
+model_apathy_DB<-lm(symp$PBA_apathy_score  ~ symp$Disease_burden)
+summary(model_apathy_DB)
+```
+P-value>0.05 let's remove noise.
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_apathy_DB)
+```
+
+
+```{r}
+boxplot(symp$Disease_burden[symp$PBA_apathy_score == min(symp$PBA_apathy_score)],symp$Disease_burden,names=c("no apathy symptoms","all"))
+```
+
+```{r}
+t.test(symp$Disease_burden[symp$PBA_apathy_score == min(symp$PBA_apathy_score)],symp$Disease_burden,paired=FALSE,alternative = "less")
+```
+```{r}
+plot(symp$Disease_burden[symp$PBA_apathy_score>min(symp$PBA_apathy_score)], symp$PBA_apathy_score[symp$PBA_apathy_score>min(symp$PBA_apathy_score)])
+
+model_apathy_DB_rm<-lm( symp$PBA_apathy_score[symp$PBA_apathy_score>min(symp$PBA_apathy_score)] ~ symp$Disease_burden[symp$PBA_apathy_score>min(symp$PBA_apathy_score)])
+summary(model_apathy_DB_rm)
+abline(model_apathy_DB_rm)
+```
+
+```{r}
+
+model_apathy_DBCRQ_rm<-lm( symp$PBA_apathy_score[symp$PBA_apathy_score>min(symp$PBA_apathy_score)] ~ symp$Disease_burden[symp$PBA_apathy_score>min(symp$PBA_apathy_score)]+symp$Cognitive_reserve[symp$PBA_apathy_score>min(symp$PBA_apathy_score)])
+summary(model_apathy_DBCRQ_rm)
+#jpeg("/home/izar/apathyab.jpg")
+plot(symp$Disease_burden[symp$PBA_apathy_score>min(symp$PBA_apathy_score)], symp$PBA_apathy_score[symp$PBA_apathy_score>min(symp$PBA_apathy_score)])
+abline(model_apathy_DBCRQ_rm)
+#dev.off()
+```
+After checking the different models values are only adjuested by CRQ using the model `model_apathy_CRQ`
+```{r}
+model_apathy_CRQ$residuals
+behave_HD_tests_s$PBA_apathy_score[!is.na(symp$Cognitive_reserve)]
+symp_N$PBA_apathy_score[!is.na(symp$Cognitive_reserve)] <- model_apathy_CRQ$residuals
+```
+
+
+
+
+####4. "PBA_perseveration_score"
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$PBA_perseveration_score )
+```
+Since it is not normally distributed we can use Spearman-rank correlation score or Kendall.
+
+```{r}
+cor.test(symp$PBA_perseveration_score, symp$Cognitive_reserve,method="kendall")
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_perseveration_CRQ<-lm(symp$PBA_perseveration_score  ~ symp$Cognitive_reserve)
+summary(model_perseveration_CRQ)
+```
+```{r}
+#jpeg("/home/izar/perseverationcrqab.jpg")
+plot(symp$Cognitive_reserve, symp$PBA_perseveration_score)
+abline(model_perseveration_CRQ)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_perseveration_CRQ)
+```
+
+There seem to be some outliers and variability.
+
+
+**Disease Burden**
+
+```{r}
+plot(symp$Disease_burden, symp$PBA_perseveration_score)
+```
+
+
+```{r}
+cor.test(symp$PBA_perseveration_score, symp$Disease_burden,method="kendall",exat = FALSE)
+```
+This variable is only affected  by CR score.
+
+
+```{r}
+model_perseveration_CRQ$residuals
+behave_HD_tests_s$PBA_perseveration_score[!is.na(symp$Cognitive_reserve)]
+symp_N$PBA_perseveration_score[!is.na(symp$Cognitive_reserve)] <- model_perseveration_CRQ$residuals
+```
+
+
+
+
+####5."UHDRS_motor"
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$UHDRS_motor )
+```
+Since it is Normally distributed we can use Pearson correlation score.
+
+```{r}
+cor.test(symp$UHDRS_motor, symp$Cognitive_reserve,method="pearson")
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_motor_CRQ<-lm(symp$UHDRS_motor  ~ symp$Cognitive_reserve)
+summary(model_motor_CRQ)
+```
+```{r}
+#jpeg("/home/izar/motorCRQab.jpg")
+plot(symp$Cognitive_reserve, symp$UHDRS_motor)
+abline(model_motor_CRQ)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_CRQ)
+```
+
+There seem to be some outliers and variability.
+
+
+**Disease Burden**
+
+```{r}
+plot(symp$Disease_burden, symp$UHDRS_motor)
+```
+
+
+```{r}
+cor.test(symp$UHDRS_motor, symp$Disease_burden,method="kendall",exat = FALSE)
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_motor_DB<-lm(symp$UHDRS_motor  ~ symp$Disease_burden)
+summary(model_motor_DB)
+```
+```{r}
+#jpeg("/home/izar/motorab.jpg")
+plot(symp$Disease_burden, symp$UHDRS_motor)
+abline(model_motor_DB)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_DB)
+```
+
+Mixed model:
+```{r}
+model_motor_DBCRQ<-lm(symp$UHDRS_motor  ~ symp$Disease_burden + symp$Cognitive_reserve)
+summary(model_motor_DBCRQ)
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_DBCRQ)
+```
+
+Best model this last one.
+
+```{r}
+model_motor_DBCRQ$residuals
+behave_HD_tests_s$UHDRS_motor[!is.na(symp$Cognitive_reserve)]
+symp_N$UHDRS_motor[!is.na(symp$Cognitive_reserve)] <- model_motor_DBCRQ$residuals
+```
+
+
+
+
+####6."UHDRS_motor_chorea"
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$UHDRS_motor_chorea )
+```
+Since it is not normally distributed we can use kendall correlation score.
+
+```{r}
+cor.test(symp$UHDRS_motor_chorea, symp$Cognitive_reserve,method="kendall")
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_motor_chorea_CRQ<-lm(symp$UHDRS_motor_chorea  ~ symp$Cognitive_reserve)
+summary(model_motor_chorea_CRQ)
+```
+```{r}
+#jpeg("/home/izar/motorchoreacrqab.jpg")
+plot(symp$Cognitive_reserve, symp$UHDRS_motor_chorea)
+abline(model_motor_chorea_CRQ)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_chorea_CRQ)
+```
+
+There seem to be some outliers and variability.
+
+
+**Disease Burden**
+
+```{r}
+plot(symp$Disease_burden, symp$UHDRS_motor_chorea)
+```
+
+
+```{r}
+cor.test(symp$UHDRS_motor_chorea, symp$Disease_burden,method="kendall",exat = FALSE)
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_motor_chorea_DB<-lm(symp$UHDRS_motor_chorea  ~ symp$Disease_burden)
+summary(model_motor_chorea_DB)
+```
+```{r}
+#jpeg("/home/izar/motorchoreadbab.jpg")
+plot(symp$Disease_burden, symp$UHDRS_motor_chorea)
+abline(model_motor_chorea_DB)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_chorea_DB)
+```
+
+Mixed model:
+```{r}
+model_motor_chorea_DBCRQ<-lm(symp$UHDRS_motor_chorea  ~ symp$Disease_burden + symp$Cognitive_reserve)
+summary(model_motor_chorea_DBCRQ)
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_chorea_DBCRQ)
+```
+
+In this case the variables don't seem to be related, therefore we will first correct for CRQ and then for DB:
+
+```{r}
+model_motor_chorea_CRQ$residuals
+behave_HD_tests_s$UHDRS_motor_chorea[!is.na(symp$Cognitive_reserve)]
+symp_N$UHDRS_motor_chorea[!is.na(symp$Cognitive_reserve)] <- model_motor_chorea_CRQ$residuals
+```
+
+
+
+```{r}
+model_motor_chorea_DB2<-lm(symp_N$UHDRS_motor_chorea  ~ symp$Disease_burden)
+summary(model_motor_chorea_DB2)
+```
+```{r}
+#jpeg("/home/izar/motorchoreadbab.jpg")
+plot(symp$Disease_burden, symp_N$UHDRS_motor_chorea)
+abline(model_motor_chorea_DB2)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_chorea_DB2)
+```
+
+```{r}
+model_motor_chorea_DB2$residuals
+behave_HD_tests_s$UHDRS_motor_chorea[!is.na(symp$Cognitive_reserve)]
+symp_N$UHDRS_motor_chorea[!is.na(symp$Cognitive_reserve)] <- model_motor_chorea_DB2$residuals
+```
+
+
+
+
+
+####7."UHDRS_motor_parkinsonism"
+
+
+
+
+
+
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$UHDRS_motor_parkinsonism )
+```
+Since it is Normally distributed we can use Pearson correlation score.
+
+```{r}
+cor.test(symp$UHDRS_motor_parkinsonism, symp$Cognitive_reserve,method="pearson")
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_motor_parkinsonism_CRQ<-lm(symp$UHDRS_motor_parkinsonism  ~ symp$Cognitive_reserve)
+summary(model_motor_parkinsonism_CRQ)
+```
+```{r}
+#jpeg("/home/izar/motor_parkinsonismCRQab.jpg")
+plot(symp$Cognitive_reserve, symp$UHDRS_motor_parkinsonism)
+abline(model_motor_parkinsonism_CRQ)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_parkinsonism_CRQ)
+```
+
+There seem to be some outliers and variability.
+
+```{r}
+shapiro.test(model_motor_parkinsonism_CRQ$residuals)
+```
+
+
+**Disease Burden**
+
+```{r}
+plot(symp$Disease_burden, symp$UHDRS_motor_parkinsonism)
+```
+
+
+```{r}
+cor.test(symp$UHDRS_motor_parkinsonism, symp$Disease_burden,method="pearson",exat = FALSE)
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_motor_parkinsonism_DB<-lm(symp$UHDRS_motor_parkinsonism  ~ symp$Disease_burden)
+summary(model_motor_parkinsonism_DB)
+```
+```{r}
+#jpeg("/home/izar/motor_parkinsonismab.jpg")
+plot(symp$Disease_burden, symp$UHDRS_motor_parkinsonism)
+abline(model_motor_parkinsonism_DB)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_parkinsonism_DB)
+```
+
+Mixed model:
+```{r}
+model_motor_parkinsonism_DBCRQ<-lm(symp$UHDRS_motor_parkinsonism  ~ symp$Disease_burden + symp$Cognitive_reserve)
+summary(model_motor_parkinsonism_DBCRQ)
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_parkinsonism_DBCRQ)
+```
+
+In this case the variables don't seem to be related, therefore we will first correct for CRQ and then for DB:
+
+```{r}
+model_motor_parkinsonism_CRQ$residuals
+behave_HD_tests_s$UHDRS_motor_parkinsonism[!is.na(symp$Cognitive_reserve)]
+symp_N$UHDRS_motor_parkinsonism[!is.na(symp$Cognitive_reserve)] <- model_motor_parkinsonism_CRQ$residuals
+```
+
+
+
+```{r}
+model_motor_parkinsonism_DB2<-lm(symp_N$UHDRS_motor_parkinsonism  ~ symp$Disease_burden)
+summary(model_motor_parkinsonism_DB2)
+```
+```{r}
+#jpeg("/home/izar/motorparkinsonismdbab.jpg")
+plot(symp$Disease_burden, symp_N$UHDRS_motor_parkinsonism)
+abline(model_motor_parkinsonism_DB2)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_motor_parkinsonism_DB2)
+```
+
+```{r}
+model_motor_parkinsonism_DB2$residuals
+behave_HD_tests_s$UHDRS_motor_parkinsonism[!is.na(symp$Cognitive_reserve)]
+symp_N$UHDRS_motor_parkinsonism[!is.na(symp$Cognitive_reserve)] <- model_motor_parkinsonism_DB2$residuals
+```
+
+
+
+
+
+####8."Verbal_fluency_total_FAS"
+
+
+
+
+
+
+
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$Verbal_fluency_total_FAS )
+```
+Since it is Normally distributed we can use Pearson correlation score.
+
+```{r}
+cor.test(symp$Verbal_fluency_total_FAS, symp$Cognitive_reserve,method="pearson")
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_Verbal_fluency_total_FAS_CRQ<-lm(symp$Verbal_fluency_total_FAS  ~ symp$Cognitive_reserve)
+summary(model_Verbal_fluency_total_FAS_CRQ)
+confint(model_Verbal_fluency_total_FAS_CRQ)
+```
+```{r}
+#jpeg("/home/izar/Verbal_fluency_total_FASCRQab.jpg")
+plot(symp$Cognitive_reserve, symp$Verbal_fluency_total_FAS)
+abline(model_Verbal_fluency_total_FAS_CRQ)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_Verbal_fluency_total_FAS_CRQ)
+```
+
+There seem to be some outliers and variability.
+
+```{r}
+shapiro.test(model_Verbal_fluency_total_FAS_CRQ$residuals)
+```
+
+
+**Disease Burden**
+
+```{r}
+scatter.smooth(symp$Disease_burden, symp$Verbal_fluency_total_FAS)
+```
+
+This plot shows that the tendency is not so linear
+
+```{r}
+cor.test(symp$Verbal_fluency_total_FAS, symp$Disease_burden,method="pearson",exat = FALSE)
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_Verbal_fluency_total_FAS_DB<-lm(symp$Verbal_fluency_total_FAS  ~ symp$Disease_burden)
+summary(model_Verbal_fluency_total_FAS_DB)
+```
+
+```{r}
+#jpeg("/home/izar/Verbal_fluency_total_FASab.jpg")
+plot(symp$Disease_burden, symp$Verbal_fluency_total_FAS)
+abline(model_Verbal_fluency_total_FAS_DB)
+
+#dev.off()
+```
+
+
+```{r}
+y <- symp$Verbal_fluency_total_FAS
+x <- symp$Disease_burden
+
+#x <- c(32,64,96,118,126,144,152.5,158)
+#y <- c(99.5,104.8,108.5,100,86,64,35.3,15)
+#we will make y the response variable and x the predictor
+#the response variable is usually on the y-axis
+
+#fit first degree polynomial equation:
+fit  <- lm(y~x)
+#second degree
+fit2 <- lm(y~poly(x,2,raw=TRUE))
+#third degree
+fit3 <- lm(y~poly(x,3,raw=TRUE))
+#fourth degree
+fit4 <- lm(y~poly(x,4,raw=TRUE))
+#generate range of 50 numbers starting from 30 and ending at 160
+xx <- seq(100,650, length=50)
+plot(x,y,pch=19)
+abline(lm(y~x))
+lines(xx, predict(lm(y~poly(x,2,raw=TRUE)), data.frame(x=xx)), col="red")
+#lines(xx, predict(fit2, data.frame(x=xx)), col="green")
+lines(xx, predict(fit3, data.frame(x=xx)), col="blue")
+lines(xx, predict(fit4, data.frame(x=xx)), col="purple")
+```
+
+
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(fit)
+```
+
+Mixed model:
+```{r}
+model_Verbal_fluency_total_FAS_DBCRQ<-lm(symp$Verbal_fluency_total_FAS  ~ symp$Disease_burden + symp$Cognitive_reserve)
+summary(model_Verbal_fluency_total_FAS_DBCRQ)
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_Verbal_fluency_total_FAS_DBCRQ)
+```
+
+In this case the variables will be corrected for the mixed model:
+
+```{r}
+model_motor_chorea_DBCRQ$residuals
+behave_HD_tests_s$Verbal_fluency_total_FAS[!is.na(symp$Cognitive_reserve)]
+symp_N$Verbal_fluency_total_FAS[!is.na(symp$Cognitive_reserve)] <- model_Verbal_fluency_total_FAS_DBCRQ$residuals
+```
+
+
+
+####9."Symbol_digit"
+
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$Symbol_digit )
+```
+Since it is Normally distributed we can use Pearson correlation score.
+
+```{r}
+cor.test(symp$Symbol_digit, symp$Cognitive_reserve,method="pearson")
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_Symbol_digit_CRQ<-lm(symp$Symbol_digit  ~ symp$Cognitive_reserve)
+summary(model_Symbol_digit_CRQ)
+confint(model_Symbol_digit_CRQ)
+```
+```{r}
+y <- symp$Symbol_digit
+x <- symp$Cognitive_reserve
+
+#x <- c(32,64,96,118,126,144,152.5,158)
+#y <- c(99.5,104.8,108.5,100,86,64,35.3,15)
+#we will make y the response variable and x the predictor
+#the response variable is usually on the y-axis
+
+#fit first degree polynomial equation:
+fit  <- lm(y~x)
+#second degree
+fit2 <- lm(y~poly(x,2,raw=TRUE))
+#third degree
+fit3 <- lm(y~poly(x,3,raw=TRUE))
+#fourth degree
+fit4 <- lm(y~poly(x,4,raw=TRUE))
+#generate range of 50 numbers starting from 30 and ending at 160
+xx <- seq(0,20, length=50)
+plot(x,y)
+abline(lm(y~x))
+lines(xx, predict(lm(y~poly(x,2,raw=TRUE)), data.frame(x=xx)), col="red")
+#lines(xx, predict(fit2, data.frame(x=xx)), col="green")
+lines(xx, predict(fit3, data.frame(x=xx)), col="blue")
+lines(xx, predict(fit4, data.frame(x=xx)), col="purple")
+
+```
+
+
+```{r}
+summary(fit)$r.squared
+summary(fit2)$r.squared
+summary(fit3)$r.squared
+summary(fit4)$r.squared
+
+```
+
+
+```{r}
+#jpeg("/home/izar/Symbol_digitCRQab.jpg")
+plot(symp$Cognitive_reserve, symp$Symbol_digit)
+abline(model_Symbol_digit_CRQ)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_Symbol_digit_CRQ)
+```
+
+There seem to be some outliers and variability.
+
+```{r}
+shapiro.test(model_Symbol_digit_CRQ$residuals)
+```
+
+
+**Disease Burden**
+
+```{r}
+scatter.smooth(symp$Disease_burden, symp$Symbol_digit)
+```
+
+This plot shows that the tendency is not so linear
+
+```{r}
+cor.test(symp$Symbol_digit, symp$Disease_burden,method="pearson",exat = FALSE)
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_Symbol_digit_DB<-lm(symp$Symbol_digit  ~ symp$Disease_burden)
+summary(model_Symbol_digit_DB)
+```
+
+```{r}
+#jpeg("/home/izar/Symbol_digitab.jpg")
+plot(symp$Disease_burden, symp$Symbol_digit)
+abline(model_Symbol_digit_DB)
+
+#dev.off()
+```
+
+
+```{r}
+y <- symp$Symbol_digit
+x <- symp$Disease_burden
+
+#x <- c(32,64,96,118,126,144,152.5,158)
+#y <- c(99.5,104.8,108.5,100,86,64,35.3,15)
+#we will make y the response variable and x the predictor
+#the response variable is usually on the y-axis
+
+#fit first degree polynomial equation:
+fit  <- lm(y~x)
+#second degree
+fit2 <- lm(y~poly(x,2,raw=TRUE))
+#third degree
+fit3 <- lm(y~poly(x,3,raw=TRUE))
+#fourth degree
+fit4 <- lm(y~poly(x,4,raw=TRUE))
+#generate range of 50 numbers starting from 30 and ending at 160
+xx <- seq(100,650, length=50)
+scatter.smooth(symp$Disease_burden, symp$Symbol_digit)
+abline(lm(y~x))
+lines(xx, predict(lm(y~poly(x,2,raw=TRUE)), data.frame(x=xx)), col="red")
+#lines(xx, predict(fit2, data.frame(x=xx)), col="green")
+lines(xx, predict(fit3, data.frame(x=xx)), col="blue")
+lines(xx, predict(fit4, data.frame(x=xx)), col="purple")
+```
+
+```{r}
+summary(fit)$r.squared
+summary(fit2)$r.squared
+summary(fit3)$r.squared
+summary(fit4)$r.squared
+
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(fit)
+```
+
+Mixed model:
+```{r}
+model_Symbol_digit_DBCRQ<-lm(symp$Symbol_digit  ~ symp$Disease_burden + symp$Cognitive_reserve)
+summary(model_Symbol_digit_DBCRQ)
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_Symbol_digit_DBCRQ)
+```
+
+In this case the variables will be corrected for the mixed model:
+
+```{r}
+model_motor_chorea_DBCRQ$residuals
+behave_HD_tests_s$Symbol_digit[!is.na(symp$Cognitive_reserve)]
+symp_N$Symbol_digit[!is.na(symp$Cognitive_reserve)] <- model_Symbol_digit_DBCRQ$residuals
+```
+
+
+
+####10."Stroop_interf"
+
+
+
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$Stroop_interf )
+```
+Since it is Normally distributed we can use Pearson correlation score.
+
+```{r}
+
+cor.test(symp$Stroop_interf, symp$Cognitive_reserve,method="pearson", exact= F)
+```
+
+Correlation is not confirmed since p-value > 0.05. 
+We proceed with DB:
+
+**Disease Burden**
+
+```{r}
+plot(symp$Disease_burden, symp$Stroop_interf)
+```
+
+This plot shows that the tendency is not so linear
+
+```{r}
+cor.test(symp$Stroop_interf, symp$Disease_burden,method="pearson",exat = FALSE)
+```
+
+No correlation since p-value > 0.05. 
+
+####11."Sen_Punish"
+
+
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$Sen_Punish )
+```
+Since it is Normally distributed we can use Pearson correlation score.
+
+```{r}
+cor.test(symp$Sen_Punish, symp$Cognitive_reserve,method="pearson")
+```
+
+Correlation is denied since p-value > 0.05. 
+
+**Disease Burden**
+
+```{r}
+plot(symp$Disease_burden, symp$Sen_Punish)
+```
+
+This plot shows that the tendency is not so linear
+
+```{r}
+cor.test(symp$Sen_Punish, symp$Disease_burden,method="pearson",exat = FALSE)
+```
+
+Correlation is denied.
+
+####12."Sen_Reward"
+
+
+
+**CRQ**
+
+```{r}
+plot(symp$Cognitive_reserve, symp$Sen_Reward )
+```
+Since it is Normally distributed we can use Pearson correlation score.
+
+```{r}
+cor.test(symp$Sen_Reward, symp$Cognitive_reserve,method="pearson")
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_Sen_Reward_CRQ<-lm(symp$Sen_Reward  ~ symp$Cognitive_reserve)
+summary(model_Sen_Reward_CRQ)
+confint(model_Sen_Reward_CRQ)
+```
+```{r}
+y <- symp$Sen_Reward
+x <- symp$Cognitive_reserve
+
+#x <- c(32,64,96,118,126,144,152.5,158)
+#y <- c(99.5,104.8,108.5,100,86,64,35.3,15)
+#we will make y the response variable and x the predictor
+#the response variable is usually on the y-axis
+
+#fit first degree polynomial equation:
+fit  <- lm(y~x)
+#second degree
+fit2 <- lm(y~poly(x,2,raw=TRUE))
+#third degree
+fit3 <- lm(y~poly(x,3,raw=TRUE))
+#fourth degree
+fit4 <- lm(y~poly(x,4,raw=TRUE))
+#generate range of 50 numbers starting from 30 and ending at 160
+xx <- seq(0,20, length=50)
+plot(x,y)
+abline(lm(y~x))
+lines(xx, predict(lm(y~poly(x,2,raw=TRUE)), data.frame(x=xx)), col="red")
+#lines(xx, predict(fit2, data.frame(x=xx)), col="green")
+lines(xx, predict(fit3, data.frame(x=xx)), col="blue")
+lines(xx, predict(fit4, data.frame(x=xx)), col="purple")
+
+```
+
+
+```{r}
+summary(fit)$r.squared
+summary(fit2)$r.squared
+summary(fit3)$r.squared
+summary(fit4)$r.squared
+
+```
+
+
+```{r}
+#jpeg("/home/izar/Sen_RewardCRQab.jpg")
+plot(symp$Cognitive_reserve, symp$Sen_Reward)
+abline(model_Sen_Reward_CRQ)
+#dev.off()
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_Sen_Reward_CRQ)
+```
+
+There seem to be some outliers and variability.
+
+```{r}
+shapiro.test(model_Sen_Reward_CRQ$residuals)
+```
+
+
+**Disease Burden**
+
+```{r}
+scatter.smooth(symp$Disease_burden, symp$Sen_Reward)
+```
+
+This plot shows that the tendency is not so linear
+
+```{r}
+cor.test(symp$Sen_Reward, symp$Disease_burden,method="pearson",exat = FALSE)
+```
+
+Correlation is confirmed since p-value < 0.05. 
+We proceed to create a model that explains the correlation:
+
+```{r}
+model_Sen_Reward_DB<-lm(symp$Sen_Reward  ~ symp$Disease_burden)
+summary(model_Sen_Reward_DB)
+```
+
+```{r}
+#jpeg("/home/izar/Sen_Rewardab.jpg")
+plot(symp$Disease_burden, symp$Sen_Reward)
+abline(model_Sen_Reward_DB)
+
+#dev.off()
+```
+
+
+```{r}
+y <- symp$Sen_Reward
+x <- symp$Disease_burden
+
+#x <- c(32,64,96,118,126,144,152.5,158)
+#y <- c(99.5,104.8,108.5,100,86,64,35.3,15)
+#we will make y the response variable and x the predictor
+#the response variable is usually on the y-axis
+
+#fit first degree polynomial equation:
+fit  <- lm(y~x)
+#second degree
+fit2 <- lm(y~poly(x,2,raw=TRUE))
+#third degree
+fit3 <- lm(y~poly(x,3,raw=TRUE))
+#fourth degree
+fit4 <- lm(y~poly(x,4,raw=TRUE))
+#generate range of 50 numbers starting from 30 and ending at 160
+xx <- seq(100,650, length=50)
+scatter.smooth(symp$Disease_burden, symp$Sen_Reward)
+abline(lm(y~x))
+lines(xx, predict(lm(y~poly(x,2,raw=TRUE)), data.frame(x=xx)), col="red")
+#lines(xx, predict(fit2, data.frame(x=xx)), col="green")
+lines(xx, predict(fit3, data.frame(x=xx)), col="blue")
+lines(xx, predict(fit4, data.frame(x=xx)), col="purple")
+```
+
+```{r}
+summary(fit)$r.squared
+summary(fit2)$r.squared
+summary(fit3)$r.squared
+summary(fit4)$r.squared
+
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(fit)
+```
+
+Mixed model:
+```{r}
+model_Sen_Reward_DBCRQ<-lm(symp$Sen_Reward  ~ symp$Disease_burden + symp$Cognitive_reserve)
+summary(model_Sen_Reward_DBCRQ)
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(model_Sen_Reward_DBCRQ)
+```
+
+In this case the variables will be corrected for the mixed model:
+
+```{r}
+model_motor_chorea_DBCRQ$residuals
+behave_HD_tests_s$Sen_Reward[!is.na(symp$Cognitive_reserve)]
+symp_N$Sen_Reward[!is.na(symp$Cognitive_reserve)] <- model_Sen_Reward_DBCRQ$residuals
+```
+
+
+
+
+
+
+
+
+
+
+
+#####################
+
+
+###Direction correction:
+In order to ease further analysis interpretation, variables with high values in the tests associated with a negative score will be changed sign.
+This will even the lecture of values to that of structural data, where a high volume value corresponds to low damage (positive outcome) and lower volumes correspond to more damage (negative outcome). In a similar manner, high symptomatic scores will be related to lower symptoms (positive outcome), while low scores will be associated with more symptoms (negative outcome)
+
+
+```{r}
+#change sign except fas symbol digit stroop
+
+symp_N[,c(2:4,8:13)]<- -symp_N[,c(2:4,8:13) ]
+
+```
+
+
+### Raw Principal Component Analysis (PCA):
+
+The function `prcomp()` uses Singular value decomposition which examines the covariances / correlations between individuals.
+
+
+
+We will install `factoextra` library to create an elegant visualization.
+```{r install.factoextra1 ,echo=FALSE}
+
+library("FactoMineR")
+library("factoextra")
+
+```
+
+```{r}
+vars_symp<- symp_N[, 2:13]
+```
+
+
+```{r}
+pca.symp <- prcomp(vars_symp, scale=FALSE)
+```
+Now we are going to visualize the eigenvalues, which show the percentage of variances explained by each principal component.
+
+```{r}
+fviz_eig(pca.symp)
+```
+```{r}
+#Eigenvalue
+pca.symp.eig <- get_eigenvalue(pca.symp)
+pca.symp.eig
+```
+Eigenvalues can be used to determine the number of principal components to retain after a PCA 	(Kaiser 1961). 
+An eigenvalue > 1 indicates that PCs account for more variance than accounted by one of the original variables in standarized data. 
+If we take the first 5 components, which eigenvalues are near 1 or above, we would still explain `r pca.symp.eig[6,3]` of the variance.
+Also, if we look at the screeplot, we can see that after the 5th component the remaining eigenvalues are relatively small and comparable in size.
+Therefore, we could reduce the variables to these 5 principal components.
+But which is the correlation between each of the variables and each principal component?
+
+#### Correlation circle
+The correlation circle shows the correlation between a variable and a principal component (PC) as the coordinates of the variable on the PC.
+Positive correlated variables point to the same side of the plot. Negative correlated variables point to opposite sides of the graph. Variables	that are away from the origin are well represented on the factor map. 
+
+```{r}
+pca.symp$rotation <- -(pca.symp$rotation)
+fviz_pca_var(pca.symp,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             #select = "varname",
+             repel = TRUE     # Avoid text overlapping
+             
+             )
+```
+
+From this graph we can deduce that some variables explain variability better than others.
+We can access to the coordinates by the following r syntax:
+```{r}
+# Results for Variables
+pca.symp.var <- get_pca_var(pca.symp)
+```
+
+
+```{r}
+pca.symp.var$coord
+```
+
+We can take a look to the variables' contribution to each PCA in percentage:
+```{r}
+pca.symp.var$contrib        # Contributions to the PCs
+```
+
+We can see that variables contribute more followed by cognitive variables, being psychiatric variables less represented in the first PC. This becomes inverted for the second PC. This finding suggest that motor and cognitive sympthoms could go together. Patients with psycological sympthoms prevail in the second PC while patients with motor & cognitive sympthoms contribute more to the 1st PC. 
+
+Another way of visualizing the contribution of each variable is to use the co2 (cosine squared) or quality of representation in a correlation matrix. 
+
+```{r}
+library("corrplot")
+corrplot(pca.symp.var$cos2, is.corr = F)
+```
+Here is easier to get an idea of the main variables contributing in each PC. `$nine_hole_peg_mean_dif_nd_d` is a linear vector composed by `motor$nine_hole_peg_mean_domin` - `motor$nine_hole_peg_mean_non_dom`, for the rest of motor variables we observe a high representation in the first PC.
+It is also possible to create a bar plot of those variables more represented in the first in the first 5 PCs for example, which we decided would be enough to represent our data:
+```{r}
+fviz_contrib(pca.symp,	choice	=	"var",	axes	=	1:5)
+```
+
+```{r}
+fviz_contrib(pca.symp,	choice	=	"var",	axes	=	5:9)
+```
+
+
+------------
+## Neuroimage Data
+### Data Pre-processment. (Toolbox)
+Although we could directly use niftii files containing raw RMN data as input, we will start from pre-processed tables with parcellation data. We used the Matlab Toolbox to generate this tables in order to save time.
+Since we are starting halfway through the pipline, this data is found in the `results` subfolder. Data is distributed in 2 separate '.xlsx' files containing relevant information from Freesurfer parcellation output '.stats' file. 
+
+```{r excels}
+globm <- read_excel("Results/C01_1/Global_Measures.xlsx")
+
+subm <- read_excel("Results/C01_1/Local_Measures.xlsx", sheet = "Subcortical Measures")
+
+cortm <- read_excel("Results/C01_1/Local_Measures.xlsx", sheet = "Cortical Measures")
+```
+
+1. '`r params$excel_global`':
+ + `globm` Contains 4 global variables: 
+    
+    ```{r globm}
+    str(globm)
+    ```
+
+    We are going to use ' $ Total Intracraneal Volume ' for volume normalization as `volume`. <br /><br />
+    
+    
+2. '`r params$excel_local`':
+ + `subm` contains subcortical mesures
+    ```{r subm}
+    str(subm)
+    ```
+    
+    We will use ' $ Volume_mm3 ' for this analysis as `HD_vol` or `C_vol` and ' $ StructName' to identify the regions.<br /><br />
+ + `cortm` contains cortical mesures
+    ```{r cortm}
+    str(cortm)
+    ```
+    
+    We will use '$ ThickAvg' , '$ CurvInd' & '$ SurfArea'.
+
+
+
+# Data Pre-processing:
+Before using our data we must perform a series of transformations and test to evaluate data integrity and check that the data we are using contains the fewer  errors possible.
+
+
+## Neuroimage
+
+## Explore variables:
+
+In the following code cell we will extract the normalized volume, as well as the thickness and curvature values for the patients in the control & HD groups. 
+
+```{r}
+#Innit. Control var.
+control_thick = control_curv = control_vol = control_surf = NULL #Variables
+controls_subj_id = NULL #ID names
+#Innit HD vars.
+HD_thick = HD_curv = HD_vol = HD_surf = NULL
+HD_subj_id = NULL 
+vol2=NULL
+for (subf_name in results_list)
+  {
+  #Load data from excels
+  if (file.exists(file.path(subf_name,params$excel_global)) && file.exists(file.path(subf_name,params$excel_local))){
+    globm = read_excel(file.path(subf_name,params$excel_global) )
+    cortm = read_excel(file.path(subf_name,params$excel_local), sheet = "Cortical Measures" )
+    subm = read_excel(file.path(subf_name,params$excel_local), sheet = "Subcortical Measures" )
+    
+  }else{next}
+  vol = globm$`Total Intracraneal Volume`
+  #vol2 = cbind(vol2,vol)
+  #Save region names. will use as rownames later
+  regions_cort = gsub("-", "_",cortm$StructName)
+  
+  regions_subcort = gsub("-", "_",subm$StructName)
+  
+  #Fill control. vars: 
+  if (basename(subf_name) %in% controls_list){
+    #print (subf_name)
+    controls_subj_id = c(controls_subj_id, basename(subf_name)) #Subject ids
+    control_vol = cbind(control_vol, subm$Volume_mm3 / vol) #normalized volume (fraction)
+    control_curv = cbind(control_curv, cortm$MeanCurv)
+    control_thick = cbind(control_thick, cortm$ThickAvg)
+    control_surf = cbind(control_surf, cortm$SurfArea / vol)
+    #Fill HD vars:
+  }else if (basename(subf_name) %in% HD_list){
+    HD_subj_id = c(HD_subj_id, basename(subf_name))
+    HD_vol = cbind(HD_vol, subm$Volume_mm3 / vol)
+    HD_curv = cbind(HD_curv, cortm$MeanCurv)
+    HD_thick = cbind(HD_thick, cortm$ThickAvg)
+    HD_surf = cbind(HD_surf, cortm$SurfArea / vol)
+    vol2 = cbind(vol2,vol)
+    
+  }
+#Set patieent ID as colnames:  
+colnames(control_vol)<-controls_subj_id
+colnames(control_curv)<-controls_subj_id
+colnames(control_thick)<-controls_subj_id
+colnames(control_surf)<-controls_subj_id
+colnames(HD_vol)<-HD_subj_id
+colnames(HD_curv)<-HD_subj_id
+colnames(HD_thick)<-HD_subj_id
+colnames(HD_surf)<-HD_subj_id
+}
+#Turn data into data.frames:
+HD_vol <- data.frame(HD_vol, row.names = regions_subcort)
+HD_curv <- data.frame(HD_curv, row.names = regions_cort)
+HD_thick <- data.frame(HD_thick, row.names = regions_cort)
+HD_surf <- data.frame(HD_surf, row.names = regions_cort)
+control_vol <- data.frame(control_vol, row.names = regions_subcort)
+control_curv <- data.frame(control_curv, row.names = regions_cort)
+control_thick <- data.frame(control_thick, row.names = regions_cort)
+control_surf <- data.frame(control_surf, row.names = regions_cort)
+group<-factor(c(desc$group, rep(3,length(controls_subj_id))),labels=c("Sympthomatic","Pre","Control"))
+```
+
+
+We can start by representing our variables in a boxplot one by one:
+
+```{r boxplot vol}
+
+vol.df_HD<-cbind(HD_vol,class=as.factor("HD"),region=row.names(HD_vol))
+vol.df_HD <- melt(vol.df_HD, id = c("class","region"))
+
+vol.df_control <- cbind(control_vol, class = as.factor("control"),region=row.names(control_vol))
+vol.df_control <- melt(vol.df_control, id = c("class","region"))
+vol.df <- rbind(vol.df_control,vol.df_HD)
+#vol.df$value<-as.numeric(vol.df$value)
+vol.df$value <- sapply(sapply(vol.df$value, as.character), as.numeric)
+
+boxplot_vol<-ggplot(data = vol.df, aes(x = region, y = value)) + geom_boxplot(aes(fill=class))
+boxplot_vol + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + ggtitle("Subcortical volumes\n (%Total i.c. volume) ") + scale_fill_manual(values=c(params$control_color, params$HD_color))
+#vol.m<- melt(as.matrix(HD_vol))
+#box_vol.control
+
+```
+\newline
+\newline
+
+In this first representation we can advance that HD group presents somewhat lower volumes in the diffrent subcortical regions except for ventricles and CSF, as expected. Although it is difficult to compare, since scale.
+
+
+```{r raw curvatures}
+
+par(mar = c(10, 5, 3, 2) + 0.1) #margins size (x,y,title,right)
+boxplot.matrix(as.matrix(control_curv),use.cols = FALSE, main = "Control_Curvatures", col=params$control_color, names=regions_cort, las = 2, cex.axis =.7 )
+
+boxplot.matrix(as.matrix(HD_curv),use.cols = FALSE,main = "HD_curv",col=params$HD_color,names=regions_cort,las=2, cex.axis =.7)
+
+```
+\newline
+\newline
+
+
+We can observe there is an extreme outlier in the HD group. It corresponds to an extremely high curvature value for the Left-entorhinal region. There are a variety of options to deal with these cases, from simply trimming off extreme values to applying more robust methods, such as quantile regression or Huber loss function. 
+
+
+
+
+
+```{r raw thickness}
+
+par(mar = c(10, 5, 3, 2) + 0.1) #margins size (x,y,title,right)
+boxplot.matrix(as.matrix(control_thick),use.cols = FALSE, main = "Control_Thickness", col = params$control_color, names=regions_cort,las = 2,cex.axis =.7)
+boxplot.matrix(as.matrix(HD_thick),use.cols = FALSE, main = "HD_Thickness",col=params$HD_color,names=regions_cort,las = 2,cex.axis =.7)
+
+
+```
+\newline
+\newline
+```{r raw surface}
+
+par(mar = c(10, 5, 3, 2) + 0.1) #margins size (x,y,title,right)
+boxplot.matrix(as.matrix(control_surf),use.cols = FALSE, main = "Control Surface Area",col=params$control_color, names=regions_cort,las = 2,cex.axis =.7)
+boxplot.matrix(as.matrix(HD_surf),use.cols = FALSE, main = "HD Surface Area",col=params$HD_color,names=regions_cort,las = 2,cex.axis =.7)
+
+
+```
+\newline
+\newline
+
+Although the means look slightly higher in the control group, we can see there is more variance and outliers in the HD group than in the controls. 
+
+
+## Normalization
+
+### Rescale
+Although we could try to cluster our data directly, there are some factors that may cause errors and affect the final output of the experiment. There are experimental errors at data collection or those that may occur later in data pre-processing such as in the parcellation. Some of them become clear during data exploration, like the one we detected on thickness `HD_curv`. 
+Apart from errors, differences in data can also affect the outcome of the experiment, such as scale.
+Since the dimensions of each region vary, if we take as input the original values, variations in small regions will be traduced to small changes in volume/thicknes/area... compared to changes in bigger regions. This causes a bias towards greater areas. 
+
+<!-- *Small variations in big regions could present higher value differences than huge variations in smaller regions.*  -->
+<!-- To correct this differences in dimension we will apply the unitary scale [0 - 1]. We will use the following formula: -->
+<!-- \newline -->
+<!--   $$z_i=\frac{x_i-\min(x)}{\max(x)-\min(x)}$$ -->
+
+<!-- ```{r rescale} -->
+<!-- scale01 <- function(x){(x-min(x))/(max(x)-min(x))} -->
+
+<!-- ``` -->
+
+<!-- The function `scale01` we just defined in the cell above transforms variables to unitary scale. This will guarantee that there is no region with a higher weight due to their proportions.  -->
+
+
+<!-- We must also correlate by age, since this factor affects the brains' integrity in a way that could be missinterpreted as cause of the disease. -->
+<!-- We will take all the participants with age data: -->
+
+
+
+
+<!-- ### Volume -->
+<!-- In the first place we will scale as explained before: -->
+
+<!-- ```{r} -->
+<!-- vol<-as.data.frame(t(cbind(control_vol,HD_vol)))      #Create data frame  -->
+<!-- vol<-as.data.frame(apply(vol,MARGIN=2, scale))      #Scale -->
+<!-- ``` -->
+
+```{r}
+vol<-as.data.frame(t(cbind(control_vol,HD_vol)))
+vol <- as.data.frame(scale(vol))
+```
+
+
+We have already divided the local volume of each region by the total intercraneal volume, which guarantees some degree of standarization. In order to remove the effect of age to the volume we must covariate by age.
+First we must prepare the data in the apropriate way to create the linear model:
+
+```{r}
+vol_mod   <- NULL
+vol$Code  <- rownames(vol)                       #Add variable Code with ID
+vol       <- merge(vol,behave[,1:4])              #Merge with descriptive vars
+vol$Gender<- factor(vol$Gender,labels=c("M","F")) #Add Gender
+vol$Group <- factor(vol$Group,labels=c("Control","HD"))
+
+```
+
+
+```{r}
+cor(vol$Age, vol[ , sapply(vol, is.numeric)])
+
+```
+
+
+
+Now we create the model that explains the volumes by the varaible Age and save the residuals in a new data frame:
+```{r}
+# Covariate by age
+for (r in regions_subcort)
+{
+  fo <- as.formula(paste("",r, "~ Age",sep = "`" ))
+  model <- do.call("lm", list(fo, quote(vol)))
+  vol_mod<-c(vol_mod,model)
+  vol[,r]<-model$residuals
+}
+vol1<-vol[,-1]
+row.names(vol1)<-vol$Code
+vol.df <- melt(vol, id= c("Group","Code","Age","Gender"))
+names(vol.df)[5]<-"region"
+
+```
+Finally we plot our data:
+
+```{r}
+vol.boxplot<-ggplot(data = vol.df, aes(x = region, y = value)) + geom_boxplot(aes(fill=Group)) + ggtitle(" Subcortical volumes\n Normalised z-scores") + scale_fill_manual(values=c(params$control_color, params$HD_color)) + theme(axis.text.x = element_text(angle = 90, hjust = 1), plot.title = element_text(hjust = 0.5))
+vol.boxplot
+```
+
+**Check the normality assumption.**
+First for controls rows(1-34)
+```{r}
+# jpeg("/home/izar/controls_qq_all_vol.jpg")
+par(mfrow=c(6,3))
+par(mar=c(1,1,1,1))
+for (test in names(vol[2:19]))
+{
+  
+  qqnorm(vol[1:34,test],ylab=test)
+  qqline(vol[1:34,test]) 
+  
+ 
+}
+# dev.off()
+
+```
+
+
+```{r}
+shapiro_controls<-m <- matrix(0, ncol = 2, nrow = 17)
+i<-0
+
+for (test in names(vol[2:19]))
+{
+  shapiro_results <-   shapiro.test(vol[1:34,test])  
+  shapiro_controls[i,1]<- test
+  shapiro_controls[i,2]<- shapiro_results$p.value
+  i<-i+1
+
+}
+
+  shapiro_controls
+  
+```
+Now for HD rows(35 - 77)
+```{r}
+# jpeg("/home/izar/HD_qq_all.jpg")
+par(mfrow=c(6,3))
+par(mar=c(1,1,1,1))
+for (test in names(vol[2:19]))
+{
+  
+  qqnorm(vol[35:77,test],ylab=test)
+  qqline(vol[35:77,test]) 
+  
+ 
+}
+# dev.off()
+
+```
+
+```{r}
+shapiro_HD<-m <- matrix(0, ncol = 2, nrow = 17)
+i<-0
+
+for (test in names(vol[2:19]))
+{
+  shapiro_results <-   shapiro.test(vol[35:77,test])  
+  shapiro_HD[i,1]<- test
+  shapiro_HD[i,2]<- shapiro_results$p.value
+  i<-i+1
+
+}
+
+  shapiro_HD
+  
+```
+
+<!-- Scatter matrix: -->
+<!-- Controls(1 - 34) -->
+<!-- ```{r} -->
+<!-- jpeg("/home/izar/Control_pairs_vol.jpg") -->
+<!-- par(mar=c(1,1,1,1)) -->
+<!-- pairs(m[1:34,]) -->
+<!-- dev.off() -->
+
+<!-- ``` -->
+
+<!-- Now for HD rows(35 - 77) -->
+<!-- ```{r} -->
+<!-- # jpeg("/home/izar/HD_qq_all.jpg") -->
+<!-- par(mfrow=c(6,3)) -->
+<!-- par(mar=c(1,1,1,1)) -->
+<!-- for (test in names(vol[2:19])) -->
+<!-- { -->
+
+<!--   qqnorm(vol[35:77,test],ylab=test) -->
+<!--   qqline(vol[35:77,test])  -->
+
+
+<!-- } -->
+<!-- # dev.off() -->
+
+<!-- ``` -->
+
+
+
+
+
+------------
+### Raw Principal Component Analysis (PCA) Controls:
+
+The function `prcomp()` uses Singular value decomposition which examines the covariances / correlations between individuals.
+
+
+
+
+
+```{r}
+pca.control <- prcomp(vol[1:34,2:19], scale=FALSE)
+```
+Now we are going to visualize the eigenvalues, which show the percentage of variances explained by each principal component.
+
+```{r}
+fviz_eig(pca.control)
+```
+```{r}
+#Eigenvalue
+pca.control.eig <- get_eigenvalue(pca.control)
+pca.control.eig
+```
+Eigenvalues can be used to determine the number of principal components to retain after a PCA 	(Kaiser 1961). 
+An eigenvalue > 1 indicates that PCs account for more variance than accounted by one of the original variables in standarized data. 
+If we take the first 5 components, which eigenvalues are near 1 or above, we would still explain `r pca.control.eig[6,3]` of the variance.
+Also, if we look at the screeplot, we can see that after the 5th component the remaining eigenvalues are relatively small and comparable in size.
+Therefore, we could reduce the variables to these 5 principal components.
+But which is the correlation between each of the variables and each principal component?
+
+#### Correlation circle
+The correlation circle shows the correlation between a variable and a principal component (PC) as the coordinates of the variable on the PC.
+Positive correlated variables point to the same side of the plot. Negative correlated variables point to opposite sides of the graph. Variables	that are away from the origin are well represented on the factor map. 
+
+```{r}
+pca.control$rotation <- -(pca.control$rotation)
+fviz_pca_var(pca.control,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             #select = "varname",
+             repel = TRUE     # Avoid text overlapping
+             
+             )
+```
+
+From this graph we can deduce that some variables explain variability better than others.
+We can access to the coordinates by the following r syntax:
+```{r}
+# Results for Variables
+pca.control.var <- get_pca_var(pca.control)
+```
+
+
+```{r}
+pca.control.var$coord
+```
+
+We can take a look to the variables' contribution to each PCA in percentage:
+```{r}
+pca.control.var$contrib        # Contributions to the PCs
+```
+
+We can see that variables contribute more followed by cognitive variables, being psychiatric variables less represented in the first PC. This becomes inverted for the second PC. This finding suggest that motor and cognitive controlthoms could go together. Patients with psycological controlthoms prevail in the second PC while patients with motor & cognitive controlthoms contribute more to the 1st PC. 
+
+Another way of visualizing the contribution of each variable is to use the co2 (cosine squared) or quality of representation in a correlation matrix. 
+
+```{r}
+library("corrplot")
+corrplot(pca.control.var$cos2, is.corr = F)
+```
+Here is easier to get an idea of the main variables contributing in each PC. `$nine_hole_peg_mean_dif_nd_d` is a linear vector composed by `motor$nine_hole_peg_mean_domin` - `motor$nine_hole_peg_mean_non_dom`, for the rest of motor variables we observe a high representation in the first PC.
+It is also possible to create a bar plot of those variables more represented in the first in the first 5 PCs for example, which we decided would be enough to represent our data:
+```{r}
+fviz_contrib(pca.control,	choice	=	"var",	axes	=	1:5)
+```
+
+```{r}
+fviz_contrib(pca.control,	choice	=	"var",	axes	=	5:9)
+```
+
+
+
+This graph allows us to delete some variables in case we would want to do that. 
+
+
+
+
+#```{r}
+# Results for Variables
+#res.var <- get_pca_var(res.pca)
+#res.var$coord          # Coordinates
+#res.var$contrib        # Contributions to the PCs
+#res.var$cos2           # Quality of representation 
+#```
+
+
+Graph of individuals. Individuals with a similar profile are grouped together.
+
+
+
+### Raw Principal Component Analysis (PCA) HDs:
+
+
+
+```{r}
+pca.HD <- prcomp(vol[35:77,2:19], scale=FALSE)
+```
+Now we are going to visualize the eigenvalues, which show the percentage of variances explained by each principal component.
+
+```{r}
+fviz_eig(pca.HD)
+```
+```{r}
+#Eigenvalue
+pca.HD.eig <- get_eigenvalue(pca.HD)
+pca.HD.eig
+```
+Eigenvalues can be used to determine the number of principal components to retain after a PCA 	(Kaiser 1961). 
+An eigenvalue > 1 indicates that PCs account for more variance than accounted by one of the original variables in standarized data. 
+If we take the first 5 components, which eigenvalues are near 1 or above, we would still explain `r pca.HD.eig[6,3]` of the variance.
+Also, if we look at the screeplot, we can see that after the 5th component the remaining eigenvalues are relatively small and comparable in size.
+Therefore, we could reduce the variables to these 5 principal components.
+But which is the correlation between each of the variables and each principal component?
+
+#### Correlation circle
+The correlation circle shows the correlation between a variable and a principal component (PC) as the coordinates of the variable on the PC.
+Positive correlated variables point to the same side of the plot. Negative correlated variables point to opposite sides of the graph. Variables	that are away from the origin are well represented on the factor map. 
+
+```{r}
+pca.HD$rotation <- -(pca.HD$rotation)
+fviz_pca_var(pca.HD,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             #select = "varname",
+             repel = TRUE     # Avoid text overlapping
+             
+             )
+```
+
+From this graph we can deduce that some variables explain variability better than others.
+We can access to the coordinates by the following r syntax:
+```{r}
+# Results for Variables
+pca.HD.var <- get_pca_var(pca.HD)
+```
+
+
+```{r}
+pca.HD.var$coord
+```
+
+We can take a look to the variables' contribution to each PCA in percentage:
+```{r}
+pca.HD.var$contrib        # Contributions to the PCs
+```
+
+We can see that variables contribute more followed by cognitive variables, being psychiatric variables less represented in the first PC. This becomes inverted for the second PC. This finding suggest that motor and cognitive HDthoms could go together. Patients with psycological HDthoms prevail in the second PC while patients with motor & cognitive HDthoms contribute more to the 1st PC. 
+
+Another way of visualizing the contribution of each variable is to use the co2 (cosine squared) or quality of representation in a correlation matrix. 
+
+```{r}
+library("corrplot")
+corrplot(pca.HD.var$cos2, is.corr = F)
+```
+Here is easier to get an idea of the main variables contributing in each PC. `$nine_hole_peg_mean_dif_nd_d` is a linear vector composed by `motor$nine_hole_peg_mean_domin` - `motor$nine_hole_peg_mean_non_dom`, for the rest of motor variables we observe a high representation in the first PC.
+It is also possible to create a bar plot of those variables more represented in the first in the first 5 PCs for example, which we decided would be enough to represent our data:
+```{r}
+fviz_contrib(pca.HD,	choice	=	"var",	axes	=	1:5)
+```
+
+```{r}
+fviz_contrib(pca.HD,	choice	=	"var",	axes	=	5:9)
+```
+
+
+
+
+
+
+
+# Clustering 
+
+We will use unsupervised clustering techniques to classify participants in control or Huntington group.
+
+```{r}
+print("All variables")
+names(vol1)
+print("Regions except empty:")
+names(vol1)[c(1:8,11:14,16,17)]
+vol1 <- vol1[c(1:8,11:14,16,17)]
+vol.hc.dist <- dist(vol1)
+```
+
+A hierarchical clustering:
+
+```{r  ward.D2}
+
+vol.hc <- hclust(vol.hc.dist, method="ward.D2")
+fviz_dend(vol.hc,cex =0.5)
+```
+We can observe 3 different kind of groups here. In the left we see almost all are HD disesed, in the center we oberve the cluster contains controls while in the right it is a mixture. We can split in 3 groups and give color to improve visualization:
+
+```{r}
+# Cut tree into 4 groups
+grp <-as.factor(cutree(vol.hc,k=5))
+grp_names<- c("Mixed1","Controls","Mixed2","HD1","HD2")
+grp_cols <-c("blue","#00cc00","purple","red","#FFD300")
+
+grp_cols2 <-c("red","#FFD300","#00cc00","blue","purple")
+table(grp)
+```
+```{r}
+# Cut in 5 groups and color by groups
+fviz_dend(vol.hc,k=5,# Cut in five groups
+cex =0.5,# label size
+#color_labels_by_k =TRUE,# color labels by groups
+k_colors = grp_cols2,#,
+rect =TRUE# Add rectangle around groups
+)
+```
+We can also visualize in a scatter plot using principal components:
+
+
+```{r}
+f_grp<-as.factor(grp)
+levels(f_grp)<-grp_names
+fviz_cluster(list(data =vol1, cluster =f_grp),
+             palette = grp_cols,
+             # choose.vars = 1:2,
+             ellipse.type ="convex",# Concentration ellipse
+             show.clust.cent =FALSE,
+             col.var = "contrib", # Color by contributions to the PC
+             #gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE)     # Avoid text overlapping
+             #ggtheme =theme_minimal())
+```
+#################################################################################
+
+```{r}
+levels(grp)<-grp_names
+fviz_pca_biplot(
+  pca.HD,
+  habillage = grp[startsWith(names(grp),"H")],
+  palette = grp_cols,
+  addEllipses = TRUE,
+  ellipse.type ="convex",
+  col.vars = "contrib", # Color by the quality of representation
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  title = "HD1 group plotted in HD correlation plot",
+  repel = TRUE     # Avoid text overlapping
+)
+
+
+```
+
+
+
+##################################################################################
+Now, segmentation is observed only for HD1 group:
+
+
+```{r}
+HD_clusta <-grp[!startsWith(names(grp),"C")]
+HD_clusta_symp<- HD_clusta[symp$Code]
+for (n in length(grp_names)){
+  
+  jpeg(paste("/home/izar/",grp_names[n],".jpg",sep=""))
+  f_grp <-as.factor(HD_clusta_symp!=n)
+  levels(f_grp) <- c(grp_names[n],"the rest")
+  fviz_pca_biplot(pca.symp,
+  habillage = f_grp,
+  palette = c(grp_cols[n],"#D3D3D3"),
+  addEllipses = TRUE,
+  ellipse.type ="convex",
+  col.vars = "contrib", # Color by the quality of representation
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+  repel = TRUE     # Avoid text overlapping
+  )
+  dev.off()
+}
+
+   
+
+```
+
+```{r}
+
+n=1
+HD_clusta <-grp[!startsWith(names(grp),"C")]
+f_grp<- HD_clusta[symp$Code]
+
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(pca.symp,
+habillage = f_grp,
+palette = c(grp_cols[n],"#D3D3D3"),
+addEllipses = TRUE,
+ellipse.type ="convex",
+col.vars = "contrib", # Color by the quality of representation
+gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+repel = TRUE     # Avoid text overlapping
+)
+
+```
+
+
+
+```{r}
+
+
+n=2
+HD_clusta <-grp[!startsWith(names(grp),"C")]
+f_grp<- HD_clusta[symp$Code]
+
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(pca.symp,
+habillage = f_grp,
+palette = c(grp_cols[n],"#D3D3D3"),
+addEllipses = TRUE,
+ellipse.type ="convex",
+col.vars = "contrib", # Color by the quality of representation
+gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+repel = TRUE     # Avoid text overlapping
+)
+
+```
+
+```{r}
+
+
+n=3
+HD_clusta <-grp[!startsWith(names(grp),"C")]
+f_grp<- HD_clusta[symp$Code]
+
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(pca.symp,
+habillage = f_grp,
+palette = c(grp_cols[n],"#D3D3D3"),
+addEllipses = TRUE,
+ellipse.type ="convex",
+col.vars = "contrib", # Color by the quality of representation
+gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+repel = TRUE     # Avoid text overlapping
+)
+
+```
+
+
+```{r}
+
+
+n=4
+HD_clusta <-grp[!startsWith(names(grp),"C")]
+f_grp<- HD_clusta[symp$Code]
+
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(
+  pca.symp,
+  habillage = f_grp,
+  palette = c(grp_cols[n],"#D3D3D3"),
+  addEllipses = TRUE,
+  ellipse.type ="convex",
+  col.vars = "contrib", # Color by the quality of representation
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+  repel = TRUE     # Avoid text overlapping
+)
+
+```
+```{r}
+
+
+n=5
+HD_clusta <-grp[!startsWith(names(grp),"C")]
+f_grp<- HD_clusta[symp$Code]
+
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(
+  pca.symp,
+  habillage = f_grp,
+  palette = c(grp_cols[n],"#D3D3D3"),
+  addEllipses = TRUE,
+  ellipse.type ="convex",
+  col.vars = "contrib", # Color by the quality of representation
+  gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+  title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+  repel = TRUE     # Avoid text overlapping
+)
+
+```
+
+
+## Improving performance
+Ward.D2 method procures to reduce intragroup variability but is it the best option?
+One way to measure how well the cluster tree generated by the hclust() function
+reflects your data is to compute the correlation between the cophenetic distances and
+the original distance data generated by the dist() function. If the clustering is valid,
+the linking of objects in the cluster tree should have a strong correlation with the
+distances between objects in the original distance matrix.
+
+```{r}
+vol.coph <-cophenetic(vol.hc)
+cor(vol.hc.dist, vol.coph)
+```
+
+Lets try some other methods.
+```{r}
+hc.methods=c("ward.D", "ward.D2", "single", "complete", "average", "mcquitty", "median", "centroid")
+for (m in hc.methods){
+  
+  vol.hc2 <-hclust(vol.hc.dist,method = m)
+  print(c(cor(vol.hc.dist,cophenetic(vol.hc2)),m))
+  
+}
+
+```
+not that good
+
+##Structural + Behavioral clustering:
+ Lets merge structural and behavioral data:
+```{r}
+combi <- merge(vars_symp, vol1, by=0, all=FALSE)
+combi <- data.frame(combi[,-1], row.names=combi[,1])
+
+```
+
+ 
+```{r hclust combi ward.D2} 
+combi.hc.dist <- dist(combi)
+combi.hc <- hclust(combi.hc.dist, method="ward.D2")
+```
+
+```{r}
+combi.coph <-cophenetic(combi.hc)
+cor(combi.hc.dist, combi.coph)
+```
+Lets try some other methods.
+```{r}
+hc.methods=c("ward.D", "ward.D2", "single", "complete", "average", "mcquitty", "median", "centroid")
+for (m in hc.methods){
+  
+  combi.hc2 <-hclust(combi.hc.dist,method = m)
+  print(c(cor(combi.hc.dist,cophenetic(combi.hc2)),m))
+  
+}
+
+```
+
+
+
+A hierarchical clustering:
+
+```{r hclust combin average}
+
+combi.hc <- hclust(combi.hc.dist, method="average")
+fviz_dend(combi.hc,cex =0.5)
+```
+We can observe 3 different kind of groups here. In the left we see almost all are HD disesed, in the center we oberve the cluster contains controls while in the right it is a mixture. We can split in 3 groups and give color to improve visualization:
+
+```{r}
+# Cut tree into 4 groups
+grp <-as.factor(cutree(combi.hc,k=5))
+grp_names<- c("Mixed1","Controls","Mixed2","HD1","HD2")
+grp_cols <-c("blue","#00cc00","purple","red","#FFD300")
+
+grp_cols2 <-c("red","#FFD300","#00cc00","blue","purple")
+table(grp)
+```
+```{r}
+# Cut in 5 groups and color by groups
+fviz_dend(combi.hc,k=5,# Cut in five groups
+cex =0.5,# label size
+#color_labels_by_k =TRUE,# color labels by groups
+k_colors = grp_cols2,#,
+rect =TRUE# Add rectangle around groups
+)
+```
+We can also visualize in a scatter plot using principal components:
+
+
+```{r}
+f_grp<-as.factor(grp)
+levels(f_grp)<-grp_names
+fviz_cluster(list(data =combi, cluster =f_grp),
+             palette = grp_cols,
+             # choose.vars = 1:2,
+             ellipse.type ="convex",# Concentration ellipse
+             show.clust.cent =FALSE,
+             col.var = "contrib", # Color by contributions to the PC
+             #gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE)     # Avoid text overlapping
+             #ggtheme =theme_minimal())
+```
+#################################################################################
+add the patient missing in symp
+```{r}
+# 
+# levels(grp)<-grp_names
+# 
+# 
+# 
+# fviz_pca_biplot(
+#   pca.HD,
+#   habillage = grp,
+#   palette = c(grp_cols,"#D3D3D3")
+#   addEllipses = TRUE,
+#   ellipse.type ="convex",
+#   col.vars = "contrib", # Color by the quality of representation
+#   gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+#   title = "HD1 group plotted in HD correlation plot",
+#   repel = TRUE     # Avoid text overlapping
+# )
+
+```
+
+
+
+##################################################################################
+Now, segmentation is observed only for HD1 group:
+
+
+```{r}
+# HD_clusta <-grp[!startsWith(names(grp),"C")]
+# HD_clusta_symp<- HD_clusta[symp$Code]
+# for (n in length(grp_names)){
+#   
+#   jpeg(paste("/home/izar/",grp_names[n],".jpg",sep=""))
+#   f_grp <-as.factor(HD_clusta_symp!=n)
+#   levels(f_grp) <- c(grp_names[n],"the rest")
+#   fviz_pca_biplot(pca.symp,
+#   habillage = f_grp,
+#   palette = c(grp_cols[n],"#D3D3D3"),
+#   addEllipses = TRUE,
+#   ellipse.type ="convex",
+#   col.vars = "contrib", # Color by the quality of representation
+#   gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+#   title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+#   repel = TRUE     # Avoid text overlapping
+#   )
+#   dev.off()
+# }
+# 
+#    
+
+```
+
+```{r}
+
+n=1
+
+f_grp<-grp
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(pca.symp,
+habillage = f_grp,
+palette = c(grp_cols[n],"#D3D3D3"),
+addEllipses = TRUE,
+ellipse.type ="convex",
+col.vars = "contrib", # Color by the quality of representation
+gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+repel = TRUE     # Avoid text overlapping
+)
+
+```
+
+
+```{r}
+
+n=1
+
+f_grp<-grp
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(pca.symp,
+habillage = f_grp,
+palette = c(grp_cols[n],"#D3D3D3"),
+addEllipses = TRUE,
+ellipse.type ="convex",
+col.vars = "contrib", # Color by the quality of representation
+gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+repel = TRUE     # Avoid text overlapping
+)
+
+```
+```{r}
+
+n=2
+
+f_grp<-grp
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(pca.symp,
+habillage = f_grp,
+palette = c(grp_cols[n],"#D3D3D3"),
+addEllipses = TRUE,
+ellipse.type ="convex",
+col.vars = "contrib", # Color by the quality of representation
+gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+repel = TRUE     # Avoid text overlapping
+)
+
+```
+```{r}
+
+n=3
+
+f_grp<-grp
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(pca.symp,
+habillage = f_grp,
+palette = c(grp_cols[n],"#D3D3D3"),
+addEllipses = TRUE,
+ellipse.type ="convex",
+col.vars = "contrib", # Color by the quality of representation
+gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+repel = TRUE     # Avoid text overlapping
+)
+
+```
+```{r}
+
+n=4
+
+f_grp<-grp
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(pca.symp,
+habillage = f_grp,
+palette = c(grp_cols[n],"#D3D3D3"),
+addEllipses = TRUE,
+ellipse.type ="convex",
+col.vars = "contrib", # Color by the quality of representation
+gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+repel = TRUE     # Avoid text overlapping
+)
+
+```
+```{r}
+
+n=5
+
+f_grp<-grp
+levels(f_grp) <- list(a=grp_names[n], b=grp_names[-n])
+levels(f_grp) <- c(grp_names[n],"the rest")
+
+fviz_pca_biplot(pca.symp,
+habillage = f_grp,
+palette = c(grp_cols[n],"#D3D3D3"),
+addEllipses = TRUE,
+ellipse.type ="convex",
+col.vars = "contrib", # Color by the quality of representation
+gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+title = paste(grp_names[n], " group plotted in symptomatic correlation plot",""),
+repel = TRUE     # Avoid text overlapping
+)
+
+```
+
+
+## Improving performance
+Ward.D2 method procures to reduce intragroup variability but is it the best option?
+One way to measure how well the cluster tree generated by the hclust() function
+reflects your data is to compute the correlation between the cophenetic distances and
+the original distance data generated by the dist() function. If the clustering is valid,
+the linking of objects in the cluster tree should have a strong correlation with the
+distances between objects in the original distance matrix.
+
+```{r}
+vol.coph <-cophenetic(combi.hc)
+cor(combi.hc.dist, vol.coph)
+```
+
+Lets try some other methods.
+```{r}
+hc.methods=c("ward.D", "ward.D2", "single", "complete", "average", "mcquitty", "median", "centroid")
+for (m in hc.methods){
+  
+  combi.hc2 <-hclust(combi.hc.dist,method = m)
+  print(c(cor(combi.hc.dist,cophenetic(combi.hc2)),m))
+  
+}
+
+```
+not that good
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
