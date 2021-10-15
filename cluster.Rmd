@@ -248,6 +248,7 @@ Since we are going to evaluate only diseased patients we subset behave data fram
 ```{r}
 behave_HD <- as.data.frame(behave[-seq_len(last_control),])
 
+#
 ```
 
 
